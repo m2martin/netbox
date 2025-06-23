@@ -11,6 +11,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import connection, ProgrammingError
 from django.db.utils import InternalError
 from django.http import Http404, HttpResponseRedirect
+from django.utils import translation
 
 from netbox.config import clear_config, get_config
 from netbox.registry import registry
@@ -35,6 +36,12 @@ class CoreMiddleware:
         # Assign a random unique ID to the request. This will be used for change logging.
         request.id = uuid.uuid4()
 
+        # Check if the language should be activated before the language cookie has been set.
+        # Necessary for direct logins without redirects (e.g. HTTP Header Authentication).
+        if (request.user.is_authenticated and settings.LANGUAGE_COOKIE_NAME not in request.COOKIES):
+            if language := request.user.config.get('locale.language'):
+                translation.activate(language)
+
         # Apply all registered request processors
         with ExitStack() as stack:
             for request_processor in registry['request_processors']:
@@ -44,8 +51,11 @@ class CoreMiddleware:
                     warnings.warn(f'Failed to initialize request processor {request_processor}: {e}')
             response = self.get_response(request)
 
-        # Check if language cookie should be renewed
-        if request.user.is_authenticated and settings.SESSION_SAVE_EVERY_REQUEST:
+        # Check if language cookie should be created (if it does not exist) or renewed (login persistence)
+        if request.user.is_authenticated and (
+            settings.SESSION_SAVE_EVERY_REQUEST or
+            settings.LANGUAGE_COOKIE_NAME not in request.COOKIES
+        ):
             if language := request.user.config.get('locale.language'):
                 response.set_cookie(
                     key=settings.LANGUAGE_COOKIE_NAME,
